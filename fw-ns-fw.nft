@@ -1,0 +1,55 @@
+#!/usr/sbin/nft -f
+#
+# Pare-feu du routeur ns-fw : filtrage + NAT + anti-brute-force SSH
+# A charger dans le namespace ns-fw :
+#   sudo ip netns exec ns-fw nft -f fw-ns-fw.nft
+#
+# -------------------------------------------------------------------------
+
+flush ruleset
+
+table inet filter {
+
+    # Liste des IP bannies (brute-force SSH). Minuteur par entree : 10 min.
+    set ssh_ban {
+        type ipv4_addr
+        flags dynamic, timeout
+        timeout 10m
+    }
+
+    chain forward {
+        type filter hook forward priority 0; policy drop;
+
+        # 0. IP deja bannie : on jette tout ce qui vient d'elle
+        ip saddr @ssh_ban counter drop
+
+        # 1. Reponses des connexions deja etablies
+        ct state established,related accept
+
+        # 2. LAN -> DMZ : web (port 80) uniquement
+        ip saddr 192.168.10.0/24 ip daddr 192.168.20.0/24 tcp dport 80 ct state new accept
+
+        # 3. Anti-brute-force : plus de 3 nouvelles connexions SSH/minute
+        #    depuis une meme IP -> on l'ajoute a la liste de ban et on jette.
+        ip daddr 192.168.20.0/24 tcp dport 22 ct state new \
+            meter ssh_flood { ip saddr limit rate over 3/minute } \
+            add @ssh_ban { ip saddr timeout 10m } \
+            counter drop
+
+        # 4. Management -> DMZ : SSH (port 22) uniquement
+        ip saddr 192.168.30.0/24 ip daddr 192.168.20.0/24 tcp dport 22 ct state new accept
+
+        # 5. LAN et Management -> Internet
+        iifname { "veth-fw-lan", "veth-fw-mgmt" } oifname "veth-fw-wan" ct state new accept
+
+        # 6. Detection : journalise + compte tout ce qui va etre bloque
+        log prefix "FW-DROP " counter
+    }
+}
+
+table ip nat {
+    chain postrouting {
+        type nat hook postrouting priority 100;
+        oifname "veth-fw-wan" masquerade
+    }
+}
