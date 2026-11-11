@@ -90,6 +90,11 @@ up() {
   echo "[*] resolv.conf dedie au namespace LAN (evite de toucher au DNS du PC)..."
   mkdir -p /etc/netns/ns-lan
   echo "nameserver 192.168.10.254" > /etc/netns/ns-lan/resolv.conf
+  # Empeche dhclient d'ecraser le /etc/resolv.conf du PC : on neutralise sa
+  # fonction d'ecriture du DNS (il configure toujours l'IP et les routes).
+  mkdir -p /etc/dhcp/dhclient-enter-hooks.d
+  printf '#!/bin/sh\nmake_resolv_conf() { : ; }\n' > /etc/dhcp/dhclient-enter-hooks.d/no-resolv-overwrite
+  chmod +x /etc/dhcp/dhclient-enter-hooks.d/no-resolv-overwrite
 
   echo "[*] Generation de la config dnsmasq (DHCP + DNS)..."
   cat > "$DNSMASQ_CONF" <<EOF
